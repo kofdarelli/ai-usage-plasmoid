@@ -1,43 +1,71 @@
 # AI Usage for KDE Plasma 6
 
-A desktop widget that shows your current Claude Code and Codex usage limits with live reset countdowns. Each service gets a card with a usage ring, remaining quota, and a countdown to the next window reset.
+[![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-8c2f26.svg)](LICENSE)
+![KDE Plasma 6](https://img.shields.io/badge/KDE_Plasma-6-1D99E3?logo=kde&logoColor=white)
+[![Latest release](https://img.shields.io/github/v/release/kofdarelli/ai-usage-plasmoid?color=8c2f26)](https://github.com/kofdarelli/ai-usage-plasmoid/releases/latest)
 
-## Screenshot
+**A translucent Liquid Glass desktop widget that shows live Claude Code and Codex usage limits with reset countdowns.**
 
-The widget renders as a translucent Liquid Glass panel on your desktop. Each card shows:
+## Highlights
 
-- **Usage ring** -- percentage of the current window consumed
-- **Window label** -- "5H" (5-hour), "7D" (7-day), or whatever the current window is
-- **Countdown** -- time remaining until the window resets
-- **Reset badges** (Codex only) -- available/used quota resets
+- **Usage rings** -- real-time percentage of the current 5-hour / 7-day / custom window consumed per service.
+- **Reset countdowns** -- live countdown to the next window reset, derived from the API response.
+- **Reset badges** -- Codex shows available/used quota resets as purple glowing dots.
+- **Defensive parsing** -- normalizes upstream field names so the widget survives Codex and Claude API changes without a re-release.
+- **Offline fallback** -- caches last-good data so the widget still shows useful information when a service is temporarily unreachable.
+- **Click-to-refresh** -- tap any card to force an immediate usage update.
 
-Click any card to force an immediate refresh.
+## Architecture
+
+```mermaid
+flowchart LR
+    A[ai-usage-status] --> B[Claude OAuth API]
+    A --> C[Codex app-server]
+    A --> D[Codex M app-server]
+    B --> E[JSON on stdout]
+    C --> E
+    D --> E
+    E --> F[Plasma DataSource]
+    F --> G[QML widget]
+    G --> H[Usage rings + countdowns]
+    E --> I[Cache file]
+    I -.->|fallback| A
+```
+
+| Layer | Implementation |
+| --- | --- |
+| Interface | QML with Liquid Glass frosted-glass shader |
+| Data collection | Node.js helper (`ai-usage-status`) using built-in `fetch` |
+| Claude | OAuth token from `~/.claude/.credentials.json`, REST to `api.anthropic.com` |
+| Codex | Local stdio protocol (`codex app-server --stdio`) |
+| Persistence | JSON cache at `~/.cache/ai-usage-status.json` (0600 perms) |
+| Build | `cmake -E tar` to produce a `.plasmoid` zip |
 
 ## Requirements
 
 | Requirement | Details |
-|---|---|
+| --- | --- |
 | **KDE Plasma 6** | Works on Wayland and X11 |
 | **Node.js 18+** | The bundled helper uses the built-in `fetch` API |
-| **Claude Code** | Must be signed in so `~/.claude/.credentials.json` exists |
-| **Codex CLI** | Must be installed and signed in (`codex` on your PATH) |
-| **Network** | Claude usage is fetched from `api.anthropic.com`; Codex usage comes from the local app-server |
+| **Claude Code** | Signed in so `~/.claude/.credentials.json` exists |
+| **Codex CLI** | Installed and signed in (`codex` on your PATH) |
+| **Network** | Claude usage from `api.anthropic.com`; Codex from local app-server |
 
 No credentials are bundled with the widget. The helper reads them locally and only sends the Claude OAuth token to Anthropic's API.
 
 ## Installation
 
-Download the `.plasmoid` file from the [releases page](https://github.com/kofdarc/ai-usage-plasmoid/releases) and install it:
+Download the `.plasmoid` file from the [latest release](https://github.com/kofdarelli/ai-usage-plasmoid/releases/latest) and install:
 
 ```sh
 kpackagetool6 --type Plasma/Applet --install ai-usage-1.0.0.plasmoid
 ```
 
-If you already have an older version installed, use `--upgrade` instead of `--install`.
+For upgrades, replace `--install` with `--upgrade`.
 
 Then right-click your desktop, choose **Add Widgets**, and search for **AI Usage**. Drag it onto your desktop.
 
-> **Placement tip:** This widget uses a Liquid Glass effect that captures the wallpaper behind it. For the best visual result, place it directly on the desktop (not in a panel). Panels do not have a wallpaper scene, so the glass falls back to a dark translucent squircle.
+> **Placement tip:** Place the widget directly on the desktop for the liquid glass effect. Panels have no wallpaper scene, so the glass falls back to a dark translucent squircle.
 
 ## Setup
 
@@ -49,7 +77,7 @@ Sign in to Claude Code if you haven't already:
 claude
 ```
 
-The widget reads your OAuth token from `~/.claude/.credentials.json`. If you use a custom credentials path, set `AI_USAGE_CLAUDE_CREDENTIALS` to the full path.
+The widget reads your OAuth token from `~/.claude/.credentials.json`. For a custom path, set `AI_USAGE_CLAUDE_CREDENTIALS`.
 
 ### Codex CLI
 
@@ -63,14 +91,14 @@ The widget communicates with the Codex app-server over stdio to read rate limits
 
 ### Optional: Second Codex profile (Codex M)
 
-If you have a second Codex profile (e.g. for a different OpenAI account), the widget can show a third card. Place your secondary profile at `~/.codex-codexm/` (must contain `auth.json`). The third card appears automatically when the profile is detected.
+If you have a second Codex profile, the widget shows a third **Codex M** card automatically when `~/.codex-codexm/auth.json` exists.
 
 ## Configuration
 
-The widget works out of the box with no configuration. If you need to override defaults, set these environment variables before starting Plasma (e.g. in `~/.config/environment.d/`):
+The widget works out of the box. Override defaults with environment variables before starting Plasma (e.g. in `~/.config/environment.d/`):
 
 | Variable | Default | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `AI_USAGE_CLAUDE_CREDENTIALS` | `~/.claude/.credentials.json` | Path to Claude OAuth credentials |
 | `AI_USAGE_CODEX_BIN` | `codex` | Path to the Codex CLI binary |
 | `AI_USAGE_CODEX_HOME` | `~/.codex` | Primary Codex profile directory |
@@ -78,20 +106,6 @@ The widget works out of the box with no configuration. If you need to override d
 | `AI_USAGE_CODEX_SECONDARY_CONFIG_HOME` | `~/.config-codexm` | Secondary Codex config directory |
 
 ## How it works
-
-```
-                      ai-usage-status (Node.js helper)
-                      /                \
-          Claude OAuth API       Codex app-server (stdio)
-          (api.anthropic.com)     (local, no network)
-                      \                /
-                     JSON on stdout
-                           |
-                     Plasma DataSource
-                     (refreshes every 5 min)
-                           |
-                     QML widget renders
-```
 
 1. Every 5 minutes (or on click), Plasma runs the `ai-usage-status` helper.
 2. The helper reads Claude credentials and calls the Anthropic usage API.
@@ -107,22 +121,19 @@ If a service is unreachable or its API shape changes, the widget degrades gracef
 ## Troubleshooting
 
 **Widget shows dashes for everything**
-- Check that Claude Code is signed in: `cat ~/.claude/.credentials.json | head -5`
-- Check that Codex is signed in: `codex auth status`
-- Check Node.js version: `node --version` (must be 18+)
+- Check Claude Code: `cat ~/.claude/.credentials.json | head -5`
+- Check Codex: `codex auth status`
+- Check Node.js: `node --version` (must be 18+)
 
 **Widget shows stale data**
 - Click any card to force a refresh
-- Check if the Codex app-server is responding: `echo '{"method":"initialize","id":1,"params":{"clientInfo":{"name":"test","version":"0.0.1"}}}' | codex app-server --stdio`
-- Check the cache file: `cat ~/.cache/ai-usage-status.json | python3 -m json.tool`
+- Check the cache: `cat ~/.cache/ai-usage-status.json | python3 -m json.tool`
 
 **Glass effect not working**
-- The widget must be placed on the desktop, not in a panel
-- Panels have no wallpaper scene, so the glass falls back to a dark translucent squircle (this is expected behavior)
+- Place the widget on the desktop, not in a panel (panels have no wallpaper scene)
 
 **Codex M card not appearing**
 - The secondary profile must exist at `~/.codex-codexm/auth.json`
-- If your paths differ, set `AI_USAGE_CODEX_SECONDARY_HOME` and `AI_USAGE_CODEX_SECONDARY_CONFIG_HOME`
 
 ## Privacy
 
@@ -131,13 +142,65 @@ If a service is unreachable or its API shape changes, the widget degrades gracef
 - Cache file is created with `0600` permissions (owner-only)
 - No telemetry, analytics, or phone-home
 
-## Building from source
+## Important components
+
+- `package/contents/tools/ai-usage-status` -- Node.js helper that collects Claude and Codex usage data.
+- `package/contents/ui/main.qml` -- QML widget with service cards, usage rings, and countdowns.
+- `package/contents/ui/components/LiquidGlass.qml` -- Frosted-glass shader derived from [macOS Widgets](https://github.com/jaxparrow07/macos-widgets).
+- `package/contents/ui/components/MacOSColors.qml` -- Dark/light palette used by the glass tint.
+
+## Project layout
+
+```text
+package/
+├── contents/
+│   ├── images/
+│   │   ├── claude.png
+│   │   └── codex.png
+│   ├── tools/
+│   │   └── ai-usage-status       Node.js data helper
+│   └── ui/
+│       ├── components/
+│       │   ├── LiquidGlass.qml
+│       │   ├── MacOSColors.qml
+│       │   └── shaders/
+│       │       ├── crop.frag(.qsb)
+│       │       ├── kawase_down.frag(.qsb)
+│       │       ├── kawase_up.frag(.qsb)
+│       │       ├── blur_h.frag(.qsb)
+│       │       ├── blur_v.frag(.qsb)
+│       │       └── liquidglass.frag(.qsb)
+│       └── main.qml
+├── metadata.json
+build.sh
+LICENSE
+README.md
+```
+
+## Verification
+
+Build the package:
 
 ```sh
 ./build.sh
 ```
 
-The `.plasmoid` file (a zip archive) is written to `dist/`.
+The `.plasmoid` file is written to `dist/`.
+
+Install and restart the desktop:
+
+```sh
+kpackagetool6 --type Plasma/Applet --upgrade dist/ai-usage-1.0.0.plasmoid
+systemctl --user restart plasma-plasmashell
+```
+
+Check for errors:
+
+```sh
+journalctl --user -u plasma-plasmashell --since "5 min ago" | grep -i "aiusage\|ai-usage"
+```
+
+No errors should appear. The widget should render with a frosted glass panel showing usage rings for each configured service.
 
 ## Compatibility
 
@@ -145,10 +208,16 @@ The widget reads data from:
 - **Anthropic's Claude Code OAuth usage endpoint** (`api.anthropic.com/api/oauth/usage`)
 - **Codex CLI's app-server rate-limits interface** (local stdio protocol)
 
-These interfaces may change in future versions of Claude Code or Codex CLI. The helper uses defensive field normalization (multiple known aliases per field) to tolerate minor API changes without breaking. If a major API change occurs, a helper update may be needed.
+These interfaces may change in future versions. The helper uses defensive field normalization (multiple known aliases per field) to tolerate minor API changes without breaking. If a major API change occurs, a helper update may be needed.
+
+## Contributing and security
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request. Report vulnerabilities privately through [SECURITY.md](SECURITY.md).
 
 ## Credits and license
 
-The Liquid Glass QML component and shaders are derived from [macOS Widgets](https://github.com/jaxparrow07/macos-widgets) by Jack Faith. That project and this widget are licensed under the GNU General Public License v3.0 only. See `LICENSE`.
+The Liquid Glass QML component and shaders are derived from [macOS Widgets](https://github.com/jaxparrow07/macos-widgets) by Jack Faith. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for bundled component licenses.
 
 The included Claude and Codex product marks belong to their respective owners and are used only to identify the services. This project is not affiliated with Anthropic or OpenAI.
+
+Licensed under the [GNU General Public License v3.0 only](LICENSE).
