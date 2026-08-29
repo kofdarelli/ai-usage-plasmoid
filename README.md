@@ -10,6 +10,7 @@
 ## Highlights
 
 - **Usage rings** -- real-time percentage of the current 5-hour / 7-day / custom window consumed per service.
+- **Multi-account Codex support** -- track two separate Codex accounts (e.g. personal + work) side by side as distinct "Codex" and "Codex M" cards.
 - **Reset countdowns** -- live countdown to the next window reset, derived from the API response.
 - **Reset badges** -- Codex shows available/used quota resets as purple glowing dots.
 - **Defensive parsing** -- normalizes upstream field names so the widget survives Codex and Claude API changes without a re-release.
@@ -100,9 +101,9 @@ codex auth login
 
 The widget communicates with the Codex app-server over stdio to read rate limits. No network calls are made -- everything stays local.
 
-### Optional: Second Codex profile (Codex M)
+### Optional: Second Codex account (Codex M)
 
-If you have a second Codex profile, the widget shows a third **Codex M** card automatically when `~/.codex-codexm/auth.json` exists.
+The widget supports two separate Codex accounts at once, useful if you split personal and work usage across two logins. Sign in to your second account under an isolated `CODEX_HOME` (e.g. `codex --codex-home ~/.codex-codexm auth login`), and the widget shows a third **Codex M** card automatically when `~/.codex-codexm/auth.json` exists. Point it at a different location with `AI_USAGE_CODEX_SECONDARY_HOME` / `AI_USAGE_CODEX_SECONDARY_CONFIG_HOME` if needed.
 
 ## Configuration
 
