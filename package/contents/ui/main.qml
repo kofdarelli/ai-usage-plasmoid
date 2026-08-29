@@ -39,9 +39,12 @@ PlasmoidItem {
     property double nowMs: Date.now()
     property string detailText: "Loading AI usage…"
     property string updatedText: "Updating"
+    property bool refreshing: false
 
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
-    preferredRepresentation: fullRepresentation
+    preferredRepresentation: Plasmoid.formFactor === PlasmaCore.Types.Planar
+        ? fullRepresentation
+        : compactRepresentation
     toolTipMainText: "AI usage"
     toolTipSubText: detailText
 
@@ -53,6 +56,12 @@ PlasmoidItem {
             short: Math.min(100, Number(found[0])),
             weekly: found.length > 1 ? Math.min(100, Number(found[1])) : null
         };
+    }
+
+    function compactUsage(value) {
+        if (!value || value === "\u2014") return "?";
+        const found = String(value).match(/\d+/g) || [];
+        return found.length ? found.slice(0, 2).join("/") : "?";
     }
 
     function resetLabel(value) {
@@ -120,6 +129,8 @@ PlasmoidItem {
 
     function refresh() {
         updatedText = "Updating";
+        refreshing = true;
+        refreshIndicatorTimer.restart();
         executable.disconnectSource(root.command);
         executable.connectSource(root.command);
     }
@@ -145,6 +156,12 @@ PlasmoidItem {
         repeat: true
         running: true
         onTriggered: root.nowMs = Date.now()
+    }
+
+    Timer {
+        id: refreshIndicatorTimer
+        interval: 6000
+        onTriggered: root.refreshing = false
     }
 
     component ResetBadge: Item {
@@ -505,25 +522,42 @@ PlasmoidItem {
                 }
         }
 
-        Text {
-            anchors.bottom: parent.bottom
-            anchors.right: parent.right
-            anchors.margins: 14
-            text: root.updatedText
-            color: Qt.rgba(1, 1, 1, 0.35)
-            font.family: "SF Pro Text"
-            font.pixelSize: 9
-            font.weight: Font.Normal
+        Rectangle {
+            visible: root.refreshing
+            anchors.centerIn: parent
+            z: 10
+            width: refreshLabel.implicitWidth + 30
+            height: 34
+            radius: 17
+            color: Qt.rgba(0.05, 0.04, 0.12, 0.78)
+            border.width: 1
+            border.color: Qt.rgba(1, 1, 1, 0.22)
+
+            Text {
+                id: refreshLabel
+                anchors.centerIn: parent
+                text: "Refreshing…"
+                color: "white"
+                font.family: "SF Pro Text"
+                font.pixelSize: 12
+                font.weight: Font.Medium
+            }
         }
     }
 
     compactRepresentation: Item {
-        implicitWidth: 170
+        implicitWidth: compactLabel.implicitWidth + 16
         implicitHeight: 28
+        Layout.minimumWidth: implicitWidth
+        Layout.preferredWidth: implicitWidth
+        Layout.maximumWidth: implicitWidth
+        Layout.minimumHeight: implicitHeight
+        Layout.preferredHeight: implicitHeight
         Text {
+            id: compactLabel
             anchors.centerIn: parent
-            text: `Claude ${root.claudeText}  ·  Codex ${root.codexText}`
-                + (root.codexmAvailable ? `  ·  Codex M ${root.codexmText}` : "")
+            text: `C ${root.compactUsage(root.claudeText)}  ·  X ${root.compactUsage(root.codexText)}`
+                + (root.codexmAvailable ? `  ·  M ${root.compactUsage(root.codexmText)}` : "")
             color: Kirigami.Theme.textColor
             font.family: "SF Pro Text"
             font.pixelSize: 11

@@ -13,8 +13,8 @@
         "License": "GPL-3.0-only",
         "Name": "AI Usage",
         "Version": "1.0.0",
-        "Website": "https://github.com/kofdarc/ai-usage-plasmoid",
-        "BugReportUrl": "https://github.com/kofdarc/ai-usage-plasmoid/issues"
+        "Website": "https://github.com/kofdarelli/ai-usage-plasmoid",
+        "BugReportUrl": "https://github.com/kofdarelli/ai-usage-plasmoid/issues"
     },
     "X-Plasma-API-Minimum-Version": "6.0"
 }

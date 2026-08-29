@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Validate helper syntax
+        run: node --check package/contents/tools/ai-usage-status
+
+      - name: Build plasmoid
+        run: ./build.sh
+
+      - name: Verify package archive
+        run: unzip -t dist/ai-usage-1.0.0.plasmoid
+
+      - name: Upload plasmoid
+        uses: actions/upload-artifact@v7
+        with:
+          name: ai-usage-plasmoid
+          path: dist/ai-usage-1.0.0.plasmoid
+          if-no-files-found: error

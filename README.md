@@ -2,6 +2,7 @@
 
 [![License: GPL-3.0](https://img.shields.io/badge/License-GPL--3.0-8c2f26.svg)](LICENSE)
 ![KDE Plasma 6](https://img.shields.io/badge/KDE_Plasma-6-1D99E3?logo=kde&logoColor=white)
+[![CI](https://github.com/kofdarelli/ai-usage-plasmoid/actions/workflows/ci.yml/badge.svg)](https://github.com/kofdarelli/ai-usage-plasmoid/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/kofdarelli/ai-usage-plasmoid?color=8c2f26)](https://github.com/kofdarelli/ai-usage-plasmoid/releases/latest)
 
 **A translucent Liquid Glass desktop widget that shows live Claude Code and Codex usage limits with reset countdowns.**
@@ -14,6 +15,16 @@
 - **Defensive parsing** -- normalizes upstream field names so the widget survives Codex and Claude API changes without a re-release.
 - **Offline fallback** -- caches last-good data so the widget still shows useful information when a service is temporarily unreachable.
 - **Click-to-refresh** -- tap any card to force an immediate usage update.
+
+## Screenshots
+
+| Full glass panel | Compact panel representation |
+| --- | --- |
+| ![AI Usage full glass widget on a dark Plasma desktop](docs/images/full-glass-panel.png) | ![AI Usage compact representation in a Plasma panel](docs/images/compact-representation.png) |
+
+| Click-to-refresh |
+| --- |
+| ![AI Usage showing its updating state after a click](docs/images/click-to-refresh.png) |
 
 ## Architecture
 
