@@ -4,6 +4,7 @@
 ![KDE Plasma 6](https://img.shields.io/badge/KDE_Plasma-6-1D99E3?logo=kde&logoColor=white)
 [![CI](https://github.com/kofdarelli/ai-usage-plasmoid/actions/workflows/ci.yml/badge.svg)](https://github.com/kofdarelli/ai-usage-plasmoid/actions/workflows/ci.yml)
 [![Latest release](https://img.shields.io/github/v/release/kofdarelli/ai-usage-plasmoid?color=8c2f26)](https://github.com/kofdarelli/ai-usage-plasmoid/releases/latest)
+[![KDE Store](https://img.shields.io/badge/KDE_Store-AI_Usage-1D99E3?logo=kde&logoColor=white)](https://store.kde.org/p/2369842/)
 
 **A translucent Liquid Glass desktop widget that shows live Claude Code and Codex usage limits with reset countdowns.**
 
@@ -67,7 +68,9 @@ No credentials are bundled with the widget. The helper reads them locally and on
 
 ## Installation
 
-Download the `.plasmoid` file from the [latest release](https://github.com/kofdarelli/ai-usage-plasmoid/releases/latest) and install:
+**From the KDE Store (recommended):** right-click your desktop, choose **Add Widgets** > **Get New Widgets...**, and search for **AI Usage** -- or install directly from the [KDE Store listing](https://store.kde.org/p/2369842/). Then drag it onto your desktop.
+
+**Manual install:** download the `.plasmoid` file from the [latest release](https://github.com/kofdarelli/ai-usage-plasmoid/releases/latest) and install:
 
 ```sh
 kpackagetool6 --type Plasma/Applet --install ai-usage-1.0.0.plasmoid
