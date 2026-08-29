@@ -1,0 +1,372 @@
+#!/usr/bin/env node
+
+const fs = require("fs");
+const { spawn } = require("child_process");
+
+const home = process.env.HOME;
+const cacheHome = process.env.XDG_CACHE_HOME || (home ? `${home}/.cache` : null);
+const cachePath = cacheHome ? `${cacheHome}/ai-usage-status.json` : null;
+const codexExecutable = process.env.AI_USAGE_CODEX_BIN || "codex";
+
+// ---------------------------------------------------------------------------
+// Field normalization — keeps the widget working when upstream APIs change
+// their field names. Each function tries multiple known aliases and returns
+// a consistent shape regardless of which variant the provider sends.
+// ---------------------------------------------------------------------------
+
+function pick(obj, ...keys) {
+    for (const k of keys) {
+        if (obj != null && obj[k] != null) return obj[k];
+    }
+    return null;
+}
+
+function normalizeWindow(w) {
+    if (!w) return null;
+    const raw = pick(w, "usedPercent", "used_percent", "utilization", "percentage", "used");
+    if (raw == null) return null;
+    const utilization = raw <= 1 ? Math.round(raw * 100) : Math.round(raw);
+    const resetsRaw = pick(w, "resetsAt", "resets_at", "reset_at", "resetsAtMs");
+    let resetsAt = null;
+    if (resetsRaw != null) {
+        if (typeof resetsRaw === "string") {
+            const ms = new Date(resetsRaw).getTime();
+            if (!isNaN(ms) && ms > 0) resetsAt = ms;
+        } else {
+            const n = Number(resetsRaw);
+            resetsAt = n > 1e12 ? n : n * 1000;
+            if (resetsAt < 946684800000) resetsAt = null;
+        }
+    }
+    return { utilization, resetsAt };
+}
+
+function windowLabel(resetsAtMs) {
+    if (!resetsAtMs) return null;
+    const remaining = resetsAtMs - Date.now();
+    if (remaining <= 0) return null;
+    const hours = remaining / (1000 * 60 * 60);
+    if (hours <= 6) return "5H";
+    if (hours <= 26) return "24H";
+    if (hours <= 168) return "7D";
+    if (hours <= 750) return "30D";
+    return "LIM";
+}
+
+function formatShort(primary, secondary) {
+    const p = primary?.utilization;
+    const s = secondary?.utilization;
+    if (p == null && s == null) return "\u2014";
+    return `${p ?? "\u2014"}%/${s ?? "\u2014"}%`;
+}
+
+function emptyService(error = null) {
+    return {
+        short: "\u2014",
+        primary: null,
+        secondary: null,
+        primaryLabel: null,
+        secondaryLabel: null,
+        resetCredits: 0,
+        totalResetCredits: 3,
+        error,
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Cache — shared across all services so a failure in one doesn't blow away
+// the last-good data from another.
+// ---------------------------------------------------------------------------
+
+function loadCache() {
+    try {
+        if (!cachePath) return {};
+        return JSON.parse(fs.readFileSync(cachePath, "utf8"));
+    } catch {
+        return {};
+    }
+}
+
+function saveCache(patch) {
+    try {
+        if (!cachePath) return;
+        const existing = loadCache();
+        const merged = { ...existing, ...patch, updatedAt: new Date().toISOString() };
+        fs.mkdirSync(cacheHome, { recursive: true });
+        fs.writeFileSync(cachePath, JSON.stringify(merged), { mode: 0o600 });
+        try {
+            fs.chmodSync(cachePath, 0o600);
+        } catch {
+            // Best-effort: some filesystems (FAT/NTFS mounts) ignore chmod.
+        }
+    } catch {
+        // Usage display should still work if the cache cannot be written.
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Claude — OAuth usage endpoint + Desktop log fallback
+// ---------------------------------------------------------------------------
+
+function latestClaudeDesktopWindows() {
+    try {
+        const log = fs.readFileSync(
+            `${home}/.config/Claude/logs/claude.ai-web.log`,
+            "utf8",
+        );
+        const lines = log.trimEnd().split("\n");
+        for (let index = lines.length - 1; index >= 0; index -= 1) {
+            const marker = lines[index].indexOf("Request failed ");
+            if (marker < 0) continue;
+            const event = JSON.parse(
+                lines[index].slice(marker + "Request failed ".length),
+            );
+            const payload = JSON.parse(event.message || "{}");
+            if (!payload.windows) continue;
+            const windows = Object.values(payload.windows);
+            if (windows.length === 0) continue;
+            const sorted = windows
+                .map(w => normalizeWindow(w))
+                .filter(w => w?.resetsAt)
+                .sort((a, b) => a.resetsAt - b.resetsAt);
+            return { primary: sorted[0] || null, secondary: sorted[1] || null };
+        }
+    } catch {
+        // Claude Desktop may not have emitted a rate-limit event yet.
+    }
+    return { primary: null, secondary: null };
+}
+
+function cachedClaude(error) {
+    const cache = loadCache();
+    if (cache.claude?.short && cache.claude.short !== "\u2014") {
+        const desktop = latestClaudeDesktopWindows();
+        return {
+            ...cache.claude,
+            primary: cache.claude.primary || desktop.primary,
+            secondary: cache.claude.secondary || desktop.secondary,
+            primaryLabel:
+                cache.claude.primaryLabel
+                || windowLabel(cache.claude.primary?.resetsAt)
+                || windowLabel(desktop.primary?.resetsAt),
+            secondaryLabel:
+                cache.claude.secondaryLabel
+                || windowLabel(cache.claude.secondary?.resetsAt)
+                || windowLabel(desktop.secondary?.resetsAt),
+            error,
+            stale: true,
+            cachedAt: cache.updatedAt || null,
+        };
+    }
+    return emptyService(error);
+}
+
+async function claudeUsage() {
+    try {
+        const credentials = JSON.parse(
+            fs.readFileSync(
+                process.env.AI_USAGE_CLAUDE_CREDENTIALS
+                    || `${home}/.claude/.credentials.json`,
+                "utf8",
+            ),
+        );
+        const accessToken = credentials.claudeAiOauth?.accessToken;
+        if (!accessToken) {
+            return emptyService("Claude is not signed in");
+        }
+        const response = await fetch("https://api.anthropic.com/api/oauth/usage", {
+            headers: {
+                authorization: `Bearer ${accessToken}`,
+                "anthropic-beta": "oauth-2025-04-20",
+                "user-agent": "claude-code-usage-widget/1.0",
+            },
+            signal: AbortSignal.timeout(12000),
+        });
+        if (!response.ok) {
+            return cachedClaude(`Claude HTTP ${response.status}`);
+        }
+        const usage = await response.json();
+        const primary = normalizeWindow(
+            usage.five_hour || usage.primary || usage.fiveHour,
+        );
+        const secondary = normalizeWindow(
+            usage.seven_day || usage.secondary || usage.sevenDay,
+        );
+        const result = {
+            short: formatShort(primary, secondary),
+            primary,
+            secondary,
+            primaryLabel: windowLabel(primary?.resetsAt),
+            secondaryLabel: windowLabel(secondary?.resetsAt),
+            resetCredits: 0,
+            totalResetCredits: 3,
+            error: null,
+        };
+        saveCache({ claude: result });
+        return result;
+    } catch (error) {
+        return cachedClaude(error.message);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Codex — stdio app-server + cache fallback
+// ---------------------------------------------------------------------------
+
+function cachedCodex(error, key = "codex") {
+    const cache = loadCache();
+    if (cache[key]?.short && cache[key].short !== "\u2014") {
+        return {
+            ...cache[key],
+            error,
+            stale: true,
+            cachedAt: cache.updatedAt || null,
+        };
+    }
+    return emptyService(error);
+}
+
+function codexUsage(env = {}) {
+    return new Promise((resolve) => {
+        const proc = spawn(codexExecutable, ["app-server", "--stdio"], {
+            stdio: ["pipe", "pipe", "ignore"],
+            env: { ...process.env, ...env },
+        });
+        let buffer = "";
+        let finished = false;
+        const finish = (value) => {
+            if (finished) return;
+            finished = true;
+            clearTimeout(timer);
+            proc.kill();
+            resolve(value);
+        };
+        const timer = setTimeout(
+            () => finish(emptyService("Codex usage timed out")),
+            15000,
+        );
+        proc.stdout.on("data", (chunk) => {
+            buffer += chunk.toString();
+            const lines = buffer.split("\n");
+            buffer = lines.pop() || "";
+            for (const line of lines) {
+                if (!line.trim()) continue;
+                let message;
+                try {
+                    message = JSON.parse(line);
+                } catch {
+                    continue;
+                }
+                if (message.id === 1 && message.result) {
+                    proc.stdin.write(
+                        `${JSON.stringify({ method: "initialized", params: {} })}\n`,
+                    );
+                    proc.stdin.write(
+                        `${JSON.stringify({ method: "account/rateLimits/read", id: 2, params: {} })}\n`,
+                    );
+                }
+                if (message.id === 2) {
+                    if (message.error) {
+                        finish(emptyService(message.error.message));
+                        return;
+                    }
+                    const limits = message.result?.rateLimits || null;
+                    const primary = normalizeWindow(limits?.primary);
+                    const secondary = normalizeWindow(limits?.secondary);
+                    const available = message.result?.rateLimitResetCredits?.availableCount ?? 0;
+                    const creditsArr = message.result?.rateLimitResetCredits?.credits || [];
+                    const total = Math.max(3, creditsArr.length, available);
+                    finish({
+                        short: formatShort(primary, secondary),
+                        primary,
+                        secondary,
+                        primaryLabel: windowLabel(primary?.resetsAt),
+                        secondaryLabel: windowLabel(secondary?.resetsAt),
+                        resetCredits: available,
+                        totalResetCredits: total,
+                        error: null,
+                    });
+                    return;
+                }
+            }
+        });
+        proc.on("error", (error) => finish(emptyService(error.message)));
+        proc.on("exit", () => {
+            if (!finished) finish(emptyService("Codex usage unavailable"));
+        });
+        proc.stdin.write(
+            `${JSON.stringify({
+                method: "initialize",
+                id: 1,
+                params: {
+                    clientInfo: {
+                        name: "plasma_ai_usage",
+                        title: "Plasma AI Usage",
+                        version: "1.0.0",
+                    },
+                },
+            })}\n`,
+        );
+    });
+}
+
+async function primaryCodexUsage() {
+    const codexHome = process.env.AI_USAGE_CODEX_HOME || `${home}/.codex`;
+    try {
+        const result = await codexUsage({ CODEX_HOME: codexHome });
+        if (!result.error) saveCache({ codex: result });
+        return result;
+    } catch (error) {
+        return cachedCodex(error.message, "codex");
+    }
+}
+
+async function codexmUsage() {
+    const codexHome = process.env.AI_USAGE_CODEX_SECONDARY_HOME
+        || `${home}/.codex-codexm`;
+    if (!fs.existsSync(`${codexHome}/auth.json`)) {
+        return { ...emptyService("Secondary Codex profile not configured"), available: false };
+    }
+    try {
+        const result = await codexUsage({
+            CODEX_HOME: codexHome,
+            XDG_CONFIG_HOME: process.env.AI_USAGE_CODEX_SECONDARY_CONFIG_HOME
+                || `${home}/.config-codexm`,
+        });
+        if (!result.error) saveCache({ codexm: result });
+        return { ...result, available: true };
+    } catch (error) {
+        return { ...cachedCodex(error.message, "codexm"), available: true };
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Main
+// ---------------------------------------------------------------------------
+
+if (!home) {
+    process.stderr.write("AI Usage requires HOME to be set\n");
+    process.exit(1);
+}
+
+Promise.all([claudeUsage(), primaryCodexUsage(), codexmUsage()])
+    .then(([claude, codex, codexm]) => {
+        process.stdout.write(
+            JSON.stringify({
+                claude,
+                codex,
+                codexm,
+                updatedAt: new Date().toISOString(),
+            }),
+        );
+    })
+    .catch((error) => {
+        process.stdout.write(
+            JSON.stringify({
+                claude: emptyService(error.message),
+                codex: emptyService(error.message),
+                codexm: emptyService(error.message),
+                updatedAt: new Date().toISOString(),
+            }),
+        );
+    });

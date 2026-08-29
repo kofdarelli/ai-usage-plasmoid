@@ -1,0 +1,20 @@
+{
+    "KPackageStructure": "Plasma/Applet",
+    "KPlugin": {
+        "Authors": [
+            {
+                "Name": "John Kofdarelli"
+            }
+        ],
+        "Category": "System Information",
+        "Description": "Monitor Claude and Codex usage limits from the Plasma desktop",
+        "Icon": "view-statistics",
+        "Id": "com.kofdarelli.aiusage",
+        "License": "GPL-3.0-only",
+        "Name": "AI Usage",
+        "Version": "1.0.0",
+        "Website": "https://github.com/kofdarc/ai-usage-plasmoid",
+        "BugReportUrl": "https://github.com/kofdarc/ai-usage-plasmoid/issues"
+    },
+    "X-Plasma-API-Minimum-Version": "6.0"
+}
