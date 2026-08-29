@@ -46,10 +46,42 @@ Item {
     property bool specEnabled: true
     property real specStrength: 0.70
 
-    // When false, the wallpaper is only re-captured on geometry changes
-    // (recommended for static wallpapers — saves GPU per frame). Turn on
-    // for animated / video wallpapers that need continuous updates.
+    // Continuous wallpaper re-capture.
+    //
+    // This exists to defeat a STARTUP RACE, not to support video wallpapers.
+    // With a one-shot capture, ShaderEffectSource can sample the wallpaper
+    // before its Image has painted a first frame, latching a permanently black
+    // texture. That is what made this widget render black on the secondary
+    // screen (HDMI-A-2), whose wallpaper paints after the widget initializes.
+    //
+    // Leaving live capture on forever is NOT free, contrary to an earlier note
+    // in the changelog. Qt does no content diffing: ShaderEffectSource.live
+    // re-renders its FBO every frame unconditionally, and the whole Dual Kawase
+    // pyramid re-runs on top of it, at the output refresh rate (165Hz on DP-1)
+    // for a wallpaper that never changes. Measured: ~18% sustained GPU on an
+    // otherwise idle desktop.
+    //
+    // So live capture now runs only during a short warm-up window after the
+    // wallpaper item resolves, which is ample for the real wallpaper to paint,
+    // then latches off with a final one-shot snapshot. The race is still
+    // defeated; steady-state cost returns to zero. A wallpaper change re-arms
+    // the warm-up (see onWallpaperItemChanged), so the picker still works.
     property bool realtimeRefraction: false
+
+    // How long live capture runs before latching to a one-shot snapshot.
+    property int warmupMs: 3000
+
+    // True only while the warm-up window is open. Drives `live` below.
+    property bool _warmupActive: false
+
+    // The 13-stage Dual Kawase pyramid below was unconditionally `live`, i.e.
+    // it re-rendered every stage every frame even when realtimeRefraction was
+    // false, because its guard `_blurActive` is effectively constant-true for a
+    // visible widget. Freezing only the wallpaper capture therefore would NOT
+    // have removed the per-frame cost. This flag freezes the whole chain too:
+    // it renders on demand (startup, wallpaper change, widget move/resize),
+    // holds the result, and stops touching the GPU until something changes.
+    property bool _pipelineLive: true
 
     property real fallbackOpacity: 0.55
 
@@ -104,9 +136,10 @@ Item {
         let moved = false
         if (p.x !== _offX) { _offX = p.x; moved = true }
         if (p.y !== _offY) { _offY = p.y; moved = true }
-        // If realtime is off, force a one-shot backdrop recapture so the
-        // sampled wallpaper stays aligned after the widget moves.
-        if (moved && !realtimeRefraction) wallpaperTex.scheduleUpdate()
+        // Force a one-shot backdrop recapture so the sampled wallpaper stays
+        // aligned after the widget moves. This now applies to realtime widgets
+        // as well: after warm-up they are frozen, so they need the same nudge.
+        if (moved) refreshBackdrop()
     }
 
     // --- Mouse tracking for specular highlight ---
@@ -147,7 +180,54 @@ Item {
                  && glass.visible && glass.width > 0 && glass.height > 0
         onTriggered: glass.updateGeometry()
     }
-    Component.onCompleted: updateGeometry()
+    // Re-arm the warm-up whenever the wallpaper item changes (wallpaper switch,
+    // containment reload) so a freshly loaded wallpaper is captured once it has
+    // actually painted, rather than sampled black and frozen that way.
+    onWallpaperItemChanged: {
+        if (glass.realtimeRefraction && glass.wallpaperItem) {
+            glass._warmupActive = true
+            warmupTimer.restart()
+        }
+    }
+
+    Timer {
+        id: warmupTimer
+        interval: glass.warmupMs
+        repeat: false
+        onTriggered: {
+            glass._warmupActive = false
+            // Final one-shot capture: by now the wallpaper has certainly
+            // painted, so this snapshot is the real image, not black.
+            glass.refreshBackdrop()
+        }
+    }
+
+    // Holds the blur chain live just long enough for a new capture to
+    // propagate through all 13 pyramid stages, then freezes it again.
+    Timer {
+        id: freezeTimer
+        interval: 250
+        repeat: false
+        onTriggered: glass._pipelineLive = false
+    }
+
+    // Re-render the backdrop once, then go back to holding the result.
+    // This is the only path that should ever wake the blur pipeline.
+    function refreshBackdrop() {
+        glass._pipelineLive = true
+        wallpaperTex.scheduleUpdate()
+        freezeTimer.restart()
+    }
+
+    Component.onCompleted: {
+        if (realtimeRefraction) {
+            _warmupActive = true
+            warmupTimer.restart()
+        } else {
+            refreshBackdrop()
+        }
+        updateGeometry()
+    }
 
     // --- Wallpaper capture ---
 
@@ -156,7 +236,7 @@ Item {
         anchors.fill: parent
         opacity: 0
         sourceItem: glass.solidMode ? null : glass.wallpaperItem
-        live: !glass.solidMode && glass.realtimeRefraction
+        live: !glass.solidMode && glass.realtimeRefraction && glass._warmupActive
         hideSource: false
         recursive: false
         smooth: true
@@ -173,8 +253,8 @@ Item {
         onSourceItemChanged: scheduleUpdate()
         Connections {
             target: glass
-            function onWidthChanged()  { if (!glass.solidMode && !glass.realtimeRefraction) wallpaperTex.scheduleUpdate() }
-            function onHeightChanged() { if (!glass.solidMode && !glass.realtimeRefraction) wallpaperTex.scheduleUpdate() }
+            function onWidthChanged()  { if (!glass.solidMode) glass.refreshBackdrop() }
+            function onHeightChanged() { if (!glass.solidMode) glass.refreshBackdrop() }
         }
     }
 
@@ -205,7 +285,11 @@ Item {
     // mode we cap the pyramid at 4 levels (smallest texture = widget/16),
     // trading a little max blur reach for motion smoothness. Static
     // wallpapers keep the full 6-level table for maximum reach.
-    readonly property int _maxBlurIters: glass.realtimeRefraction ? 4 : 6
+    // Cap follows the ACTUAL motion state, not the config flag: the capture is
+    // only moving during warm-up, and is static forever after, so the full
+    // 6-level table applies once warm-up ends. (At the default blurRadius of 6
+    // this cap does not bind either way, since that maps to 3 iterations.)
+    readonly property int _maxBlurIters: glass._warmupActive ? 4 : 6
     readonly property int _blurIters: {
         if (!_blurActive) return 0;
         var r = glass.blurRadius;
@@ -245,7 +329,7 @@ Item {
         anchors.fill: parent
         opacity: 0
         sourceItem: glass._blurActive ? cropPass : null
-        live: glass._blurActive
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive)
         hideSource: true
         smooth: true
     }
@@ -262,7 +346,7 @@ Item {
     ShaderEffectSource {
         id: down1Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 1 ? down1 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: Qt.size(Math.max(1, Math.round(glass._widgetW / 2)),
                              Math.max(1, Math.round(glass._widgetH / 2)))
     }
@@ -278,7 +362,7 @@ Item {
     ShaderEffectSource {
         id: down2Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 2 ? down2 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: Qt.size(Math.max(1, Math.round(glass._widgetW / 4)),
                              Math.max(1, Math.round(glass._widgetH / 4)))
     }
@@ -294,7 +378,7 @@ Item {
     ShaderEffectSource {
         id: down3Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 3 ? down3 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: Qt.size(Math.max(1, Math.round(glass._widgetW / 8)),
                              Math.max(1, Math.round(glass._widgetH / 8)))
     }
@@ -310,7 +394,7 @@ Item {
     ShaderEffectSource {
         id: down4Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 4 ? down4 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: Qt.size(Math.max(1, Math.round(glass._widgetW / 16)),
                              Math.max(1, Math.round(glass._widgetH / 16)))
     }
@@ -326,7 +410,7 @@ Item {
     ShaderEffectSource {
         id: down5Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 5 ? down5 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: Qt.size(Math.max(1, Math.round(glass._widgetW / 32)),
                              Math.max(1, Math.round(glass._widgetH / 32)))
     }
@@ -342,7 +426,7 @@ Item {
     ShaderEffectSource {
         id: down6Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 6 ? down6 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: Qt.size(Math.max(1, Math.round(glass._widgetW / 64)),
                              Math.max(1, Math.round(glass._widgetH / 64)))
     }
@@ -367,7 +451,7 @@ Item {
     ShaderEffectSource {
         id: up6Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 6 ? up6 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: down5Tex.textureSize
     }
 
@@ -382,7 +466,7 @@ Item {
     ShaderEffectSource {
         id: up5Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 5 ? up5 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: down4Tex.textureSize
     }
 
@@ -397,7 +481,7 @@ Item {
     ShaderEffectSource {
         id: up4Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 4 ? up4 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: down3Tex.textureSize
     }
 
@@ -412,7 +496,7 @@ Item {
     ShaderEffectSource {
         id: up3Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 3 ? up3 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: down2Tex.textureSize
     }
 
@@ -427,7 +511,7 @@ Item {
     ShaderEffectSource {
         id: up2Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive && glass._blurIters >= 2 ? up2 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: down1Tex.textureSize
     }
 
@@ -441,7 +525,7 @@ Item {
     ShaderEffectSource {
         id: up1Tex; anchors.fill: parent; opacity: 0
         sourceItem: glass._blurActive ? up1 : null
-        live: glass._blurActive; hideSource: true; smooth: true
+        live: glass._blurActive && (glass._warmupActive || glass._pipelineLive); hideSource: true; smooth: true
         textureSize: Qt.size(Math.round(glass._widgetW), Math.round(glass._widgetH))
     }
 
