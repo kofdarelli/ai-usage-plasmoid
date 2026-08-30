@@ -16,7 +16,7 @@
 - **Reset badges** -- Codex shows available/used quota resets as purple glowing dots.
 - **Defensive parsing** -- normalizes upstream field names so the widget survives Codex and Claude API changes without a re-release.
 - **Offline fallback** -- caches last-good data so the widget still shows useful information when a service is temporarily unreachable.
-- **Click-to-refresh** -- tap any card to force an immediate usage update.
+- **Click-to-refresh** -- tap any card to force an immediate usage update and re-capture the desktop background.
 
 ## Screenshots
 
@@ -141,7 +141,7 @@ If a service is unreachable or its API shape changes, the widget degrades gracef
 - Check Node.js: `node --version` (must be 18+)
 
 **Widget shows stale data**
-- Click any card to force a refresh
+- Click any card to force an immediate usage update and re-capture the background
 - Check the cache: `cat ~/.cache/ai-usage-status.json | python3 -m json.tool`
 
 **Glass effect not working**

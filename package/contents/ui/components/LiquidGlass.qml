@@ -46,26 +46,30 @@ Item {
     property bool specEnabled: true
     property real specStrength: 0.70
 
-    // Continuous wallpaper re-capture.
+    // Wallpaper capture policy.
     //
-    // This exists to defeat a STARTUP RACE, not to support video wallpapers.
-    // With a one-shot capture, ShaderEffectSource can sample the wallpaper
-    // before its Image has painted a first frame, latching a permanently black
-    // texture. That is what made this widget render black on the secondary
-    // screen (HDMI-A-2), whose wallpaper paints after the widget initializes.
+    // Live (continuous) capture of the wallpaper exists to defeat a STARTUP
+    // RACE, not to support video wallpapers. With a one-shot capture,
+    // ShaderEffectSource can sample the wallpaper before its Image has painted
+    // a first frame, latching a permanently black texture. That is what made
+    // this widget render black on the secondary screen (HDMI-A-2), whose
+    // wallpaper paints after the widget initializes.
     //
-    // Leaving live capture on forever is NOT free, contrary to an earlier note
-    // in the changelog. Qt does no content diffing: ShaderEffectSource.live
-    // re-renders its FBO every frame unconditionally, and the whole Dual Kawase
-    // pyramid re-runs on top of it, at the output refresh rate (165Hz on DP-1)
-    // for a wallpaper that never changes. Measured: ~18% sustained GPU on an
-    // otherwise idle desktop.
+    // Qt does no content diffing: ShaderEffectSource.live re-renders its FBO
+    // every frame unconditionally, and the whole Dual Kawase pyramid re-runs
+    // on top of it. So live capture must never run in steady state.
     //
-    // So live capture now runs only during a short warm-up window after the
-    // wallpaper item resolves, which is ample for the real wallpaper to paint,
-    // then latches off with a final one-shot snapshot. The race is still
-    // defeated; steady-state cost returns to zero. A wallpaper change re-arms
-    // the warm-up (see onWallpaperItemChanged), so the picker still works.
+    // Policy: a warm-up window runs once at startup (always, even with
+    // realtimeRefraction off) so the real wallpaper paints and is latched with
+    // a final one-shot snapshot; steady-state cost is then zero and nothing
+    // re-captures automatically. The host is responsible for demanding a
+    // re-capture when it wants a fresh backdrop, via refreshBackdrop()
+    // (e.g. the widget's click-to-refresh).
+    //
+    // realtimeRefraction additionally re-arms the warm-up whenever the
+    // wallpaper item changes (video wallpapers / automatic follow-the-wallpaper
+    // behavior). When it is off, a wallpaper change leaves the last captured
+    // backdrop untouched until the host calls refreshBackdrop().
     property bool realtimeRefraction: false
 
     // How long live capture runs before latching to a one-shot snapshot.
@@ -180,9 +184,11 @@ Item {
                  && glass.visible && glass.width > 0 && glass.height > 0
         onTriggered: glass.updateGeometry()
     }
-    // Re-arm the warm-up whenever the wallpaper item changes (wallpaper switch,
-    // containment reload) so a freshly loaded wallpaper is captured once it has
-    // actually painted, rather than sampled black and frozen that way.
+    // Re-arm the warm-up only when realtimeRefraction is enabled, so the
+    // backdrop automatically follows wallpaper changes (video wallpapers, or
+    // the legacy picker behavior). When realtimeRefraction is off (the default
+    // for click-managed widgets), a wallpaper change does nothing: the last
+    // captured backdrop stays until the host calls refreshBackdrop().
     onWallpaperItemChanged: {
         if (glass.realtimeRefraction && glass.wallpaperItem) {
             glass._warmupActive = true
@@ -220,12 +226,12 @@ Item {
     }
 
     Component.onCompleted: {
-        if (realtimeRefraction) {
-            _warmupActive = true
-            warmupTimer.restart()
-        } else {
-            refreshBackdrop()
-        }
+        // Always run the startup warm-up window so the first backdrop is the
+        // real wallpaper, even on screens whose wallpaper paints after this
+        // widget initializes. After the window the widget holds the captured
+        // backdrop and re-captures only on demand (refreshBackdrop()).
+        _warmupActive = true
+        warmupTimer.restart()
         updateGeometry()
     }
 
@@ -236,7 +242,7 @@ Item {
         anchors.fill: parent
         opacity: 0
         sourceItem: glass.solidMode ? null : glass.wallpaperItem
-        live: !glass.solidMode && glass.realtimeRefraction && glass._warmupActive
+        live: !glass.solidMode && glass._warmupActive
         hideSource: false
         recursive: false
         smooth: true

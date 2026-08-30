@@ -131,6 +131,8 @@ PlasmoidItem {
         updatedText = "Updating";
         refreshing = true;
         refreshIndicatorTimer.restart();
+        if (representationGlass)
+            representationGlass.refreshBackdrop();
         executable.disconnectSource(root.command);
         executable.connectSource(root.command);
     }
@@ -441,7 +443,7 @@ PlasmoidItem {
             chromaStrength: 0.30
             specStrength: 0.70
             blurRadius: 6
-            realtimeRefraction: true
+            realtimeRefraction: false
             fallbackOpacity: 0.55
             solidMode: false
         }
