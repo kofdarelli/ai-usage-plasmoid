@@ -23,11 +23,11 @@ jobs:
         run: ./build.sh
 
       - name: Verify package archive
-        run: unzip -t dist/ai-usage-1.0.0.plasmoid
+        run: for f in dist/*.plasmoid; do unzip -t "$f"; done
 
       - name: Upload plasmoid
         uses: actions/upload-artifact@v7
         with:
           name: ai-usage-plasmoid
-          path: dist/ai-usage-1.0.0.plasmoid
+          path: dist/*.plasmoid
           if-no-files-found: error

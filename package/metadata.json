@@ -12,7 +12,7 @@
         "Id": "com.kofdarelli.aiusage",
         "License": "GPL-3.0-only",
         "Name": "AI Usage",
-        "Version": "1.0.0",
+        "Version": "1.0.1",
         "Website": "https://github.com/kofdarelli/ai-usage-plasmoid",
         "BugReportUrl": "https://github.com/kofdarelli/ai-usage-plasmoid/issues"
     },

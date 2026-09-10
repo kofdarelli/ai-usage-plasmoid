@@ -73,7 +73,7 @@ No credentials are bundled with the widget. The helper reads them locally and on
 **Manual install:** download the `.plasmoid` file from the [latest release](https://github.com/kofdarelli/ai-usage-plasmoid/releases/latest) and install:
 
 ```sh
-kpackagetool6 --type Plasma/Applet --install ai-usage-1.0.0.plasmoid
+kpackagetool6 --type Plasma/Applet --install ai-usage-1.0.1.plasmoid
 ```
 
 For upgrades, replace `--install` with `--upgrade`.
@@ -205,7 +205,7 @@ The `.plasmoid` file is written to `dist/`.
 Install and restart the desktop:
 
 ```sh
-kpackagetool6 --type Plasma/Applet --upgrade dist/ai-usage-1.0.0.plasmoid
+kpackagetool6 --type Plasma/Applet --upgrade dist/ai-usage-1.0.1.plasmoid
 systemctl --user restart plasma-plasmashell
 ```
 

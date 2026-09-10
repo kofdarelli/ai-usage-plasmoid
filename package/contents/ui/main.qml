@@ -41,6 +41,8 @@ PlasmoidItem {
     property string updatedText: "Updating"
     property bool refreshing: false
 
+    signal refreshGlass()
+
     Plasmoid.backgroundHints: PlasmaCore.Types.NoBackground
     preferredRepresentation: Plasmoid.formFactor === PlasmaCore.Types.Planar
         ? fullRepresentation
@@ -131,8 +133,7 @@ PlasmoidItem {
         updatedText = "Updating";
         refreshing = true;
         refreshIndicatorTimer.restart();
-        if (representationGlass)
-            representationGlass.refreshBackdrop();
+        refreshGlass();
         executable.disconnectSource(root.command);
         executable.connectSource(root.command);
     }
@@ -446,6 +447,11 @@ PlasmoidItem {
             realtimeRefraction: false
             fallbackOpacity: 0.55
             solidMode: false
+        }
+
+        Connections {
+            target: root
+            function onRefreshGlass() { representationGlass.refreshBackdrop() }
         }
 
 
